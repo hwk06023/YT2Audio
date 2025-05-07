@@ -1,1 +1,9 @@
 venv
+downdloads/*
+!downdloads/.gitkeep
+!downdloads/english/
+!downdloads/korean/
+downdloads/english/*
+downdloads/korean/*
+!downdloads/english/.gitkeep
+!downdloads/korean/.gitkeep
