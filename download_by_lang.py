@@ -1,6 +1,7 @@
 import os
 import subprocess
 import re
+import concurrent.futures
 
 audio_format = "wav"
 
@@ -16,47 +17,49 @@ def sanitize_folder_name(name):
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
 
-for lang, txt_path in lang_files.items():
-    with open(txt_path, "r") as f:
-        playlist_urls = [line.strip() for line in f if line.strip()]
+def download_playlist(lang, url, playlist_index):
+    folder_name = f"playlist_{playlist_index}"
+    output_dir = f"downloads/{lang}/{folder_name}"
+    os.makedirs(output_dir, exist_ok=True)
 
-    for i, url in enumerate(playlist_urls):
-        playlist_index = i + 1
+    command = [
+        "yt-dlp",
+        url,
+        "-x",
+        "--audio-format",
+        audio_format,
+        "--audio-quality",
+        "0",
+        "--output",
+        os.path.join(output_dir, "%(title)s.%(ext)s"),
+        "--ignore-errors",
+        "--no-overwrites",
+        "--cookies",
+        "cookies.txt",
+    ]
 
-        # 플레이리스트 이름 얻기
-        print(f"Getting playlist info for {url}...")
-        info_command = [
-            "yt-dlp",
-            "--skip-download",
-            "--print",
-            "%(playlist_title)s",
-            url,
-        ]
+    print(f"Downloading {folder_name} for language: {lang}")
+    subprocess.run(command)
 
-        result = subprocess.run(info_command, capture_output=True, text=True)
-        playlist_title = result.stdout.strip()
 
-        if playlist_title:
-            folder_name = sanitize_folder_name(playlist_title)
-        else:
-            folder_name = f"playlist_{playlist_index}"
+def main():
+    download_tasks = []
+    
+    for lang, txt_path in lang_files.items():
+        with open(txt_path, "r") as f:
+            playlist_urls = [line.strip() for line in f if line.strip()]
 
-        output_dir = f"downloads/{lang}/{folder_name}"
-        os.makedirs(output_dir, exist_ok=True)
+        for i, url in enumerate(playlist_urls):
+            playlist_index = i + 1
+            download_tasks.append((lang, url, playlist_index))
+    
+    max_workers = 50
+    print(f"Using {max_workers} CPU cores for parallel downloads")
+    
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(download_playlist, lang, url, index) for lang, url, index in download_tasks]
+        concurrent.futures.wait(futures)
 
-        command = [
-            "yt-dlp",
-            url,
-            "-x",
-            "--audio-format",
-            audio_format,
-            "--audio-quality",
-            "0",
-            "--output",
-            os.path.join(output_dir, "%(title)s.%(ext)s"),
-            "--ignore-errors",
-            "--no-overwrites",
-        ]
 
-        print(f"Downloading {folder_name} for language: {lang}")
-        subprocess.run(command)
+if __name__ == "__main__":
+    main()
