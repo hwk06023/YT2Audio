@@ -2,5 +2,9 @@ venv
 downloads/*
 cookies.txt
 .DS_Store
+data/*
+metadata/*
 **/data/*
+**/metadata/*
 .env
+__pycache__
