@@ -2,3 +2,5 @@ venv
 downloads/*
 cookies.txt
 .DS_Store
+**/data/*
+.env
