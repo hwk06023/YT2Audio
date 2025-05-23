@@ -8,3 +8,7 @@ metadata/*
 **/metadata/*
 .env
 __pycache__
+metadata/*
+mfa/*
+diarized_data/*
+transcription_data/*

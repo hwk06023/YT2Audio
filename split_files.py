@@ -11,7 +11,7 @@ if os.path.exists(file_path):
     end_time = len(audio) - 60 * 1000
     segment = audio[start_time:end_time]
 
-    segment_length = 20 * 60 * 1000
+    segment_length = 5 * 60 * 1000
     num_segments = (end_time - start_time) // segment_length + 1
 
     output_dir = f"data/{file_name}"
