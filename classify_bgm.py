@@ -35,6 +35,7 @@ def classify_with_clap_htsat_fused(audio_path):
                 "laughter",
                 "breathing",
                 "footsteps",
+                # ... 여기에 더 입력 !
             ],
         )
         return result[:3]

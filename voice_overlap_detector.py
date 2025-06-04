@@ -1,204 +1,303 @@
 import numpy as np
 import librosa
-import scipy.signal
+import os
+import soundfile as sf
 from typing import List, Tuple, Optional
-import webrtcvad
-import wave
+import torch
+from nemo.collections.asr.models import ClusteringDiarizer
+import tempfile
+import json
+from omegaconf import OmegaConf
 
 
-class VoiceOverlapDetector:
-    def __init__(self, sample_rate: int = 16000, frame_duration: int = 30):
-        self.sample_rate = sample_rate
-        self.frame_duration = frame_duration
-        self.vad = webrtcvad.Vad(3)
+class NeMoVoiceOverlapDetector:
+    def __init__(self):
+        pass
 
-    def detect_voice_activity(
-        self, audio_data: np.ndarray
-    ) -> List[Tuple[float, float]]:
-        frame_size = int(self.sample_rate * self.frame_duration / 1000)
-        voice_segments = []
-        current_start = None
+    def create_manifest(self, audio_file: str, temp_dir: str) -> str:
+        manifest_path = os.path.join(temp_dir, "input_manifest.json")
 
-        for i in range(0, len(audio_data) - frame_size, frame_size):
-            frame = audio_data[i : i + frame_size]
-            audio_bytes = (frame * 32767).astype(np.int16).tobytes()
+        with open(manifest_path, "w") as f:
+            audio_entry = {
+                "audio_filepath": os.path.abspath(audio_file),
+                "offset": 0,
+                "duration": None,
+                "label": "infer",
+                "text": "-",
+                "num_speakers": None,
+                "rttm_filepath": None,
+                "uem_filepath": None,
+            }
+            f.write(json.dumps(audio_entry) + "\n")
 
-            if self.vad.is_speech(audio_bytes, self.sample_rate):
-                if current_start is None:
-                    current_start = i / self.sample_rate
-            else:
-                if current_start is not None:
-                    voice_segments.append((current_start, i / self.sample_rate))
-                    current_start = None
+        return manifest_path
 
-        if current_start is not None:
-            voice_segments.append((current_start, len(audio_data) / self.sample_rate))
+    def detect_overlaps_with_nemo(self, audio_file: str) -> dict:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_data, sr = librosa.load(audio_file, sr=16000, mono=True)
 
-        return voice_segments
+            temp_audio_file = os.path.join(temp_dir, "temp_mono_audio.wav")
+            sf.write(temp_audio_file, audio_data, sr)
 
-    def energy_based_detection(
-        self,
-        audio_data: np.ndarray,
-        window_size: float = 0.025,
-        hop_size: float = 0.010,
-        threshold_percentile: int = 30,
-    ) -> List[Tuple[float, float]]:
-        win_length = int(window_size * self.sample_rate)
-        hop_length = int(hop_size * self.sample_rate)
+            manifest_path = self.create_manifest(temp_audio_file, temp_dir)
 
-        energy = []
-        for i in range(0, len(audio_data) - win_length, hop_length):
-            frame = audio_data[i : i + win_length]
-            frame_energy = np.sum(frame**2)
-            energy.append(frame_energy)
+            device = "cpu"
 
-        energy = np.array(energy)
-        threshold = np.percentile(energy, threshold_percentile)
-
-        voice_frames = energy > threshold
-        segments = []
-        in_voice = False
-        start_time = 0
-
-        for i, is_voice in enumerate(voice_frames):
-            time = i * hop_size
-            if is_voice and not in_voice:
-                start_time = time
-                in_voice = True
-            elif not is_voice and in_voice:
-                segments.append((start_time, time))
-                in_voice = False
-
-        if in_voice:
-            segments.append((start_time, len(voice_frames) * hop_size))
-
-        return segments
-
-    def spectral_centroid_detection(
-        self, audio_data: np.ndarray
-    ) -> List[Tuple[float, float]]:
-        stft = librosa.stft(audio_data, sr=self.sample_rate)
-        spectral_centroids = librosa.feature.spectral_centroid(
-            S=np.abs(stft), sr=self.sample_rate
-        )[0]
-
-        threshold = np.mean(spectral_centroids) + np.std(spectral_centroids)
-        voice_frames = spectral_centroids > threshold
-
-        segments = []
-        in_voice = False
-        start_idx = 0
-
-        hop_length = 512
-        for i, is_voice in enumerate(voice_frames):
-            time = librosa.frames_to_time(i, sr=self.sample_rate, hop_length=hop_length)
-            if is_voice and not in_voice:
-                start_time = time
-                in_voice = True
-            elif not is_voice and in_voice:
-                segments.append((start_time, time))
-                in_voice = False
-
-        if in_voice:
-            end_time = librosa.frames_to_time(
-                len(voice_frames), sr=self.sample_rate, hop_length=hop_length
+            config = OmegaConf.create(
+                {
+                    "device": device,
+                    "sample_rate": 16000,
+                    "num_workers": 0,
+                    "verbose": True,
+                    "batch_size": 1,
+                    "diarizer": {
+                        "manifest_filepath": manifest_path,
+                        "out_dir": temp_dir,
+                        "oracle_vad": False,
+                        "collar": 0.25,
+                        "ignore_overlap": False,
+                        "vad": {
+                            "model_path": "vad_multilingual_marblenet",
+                            "parameters": {
+                                "window_length_in_sec": 0.15,
+                                "shift_length_in_sec": 0.01,
+                                "smoothing": "median",
+                                "overlap": 0.875,
+                                "onset": 0.3,
+                                "offset": 0.6,
+                                "pad_onset": 0.1,
+                                "pad_offset": 0.1,
+                                "min_duration_on": 0.1,
+                                "min_duration_off": 0.1,
+                                "filter_speech_first": False,
+                            },
+                        },
+                        "speaker_embeddings": {
+                            "model_path": "titanet_large",
+                            "parameters": {
+                                "window_length_in_sec": 1.0,
+                                "shift_length_in_sec": 0.5,
+                                "multiscale_weights": None,
+                                "save_embeddings": False,
+                            },
+                        },
+                        "clustering": {
+                            "parameters": {
+                                "oracle_num_speakers": False,
+                                "max_num_speakers": 20,
+                                "enhanced_count_thres": 40,
+                                "max_rp_threshold": 0.15,
+                                "sparse_search_volume": 50,
+                            }
+                        },
+                    },
+                }
             )
-            segments.append((start_time, end_time))
 
-        return segments
+            model = ClusteringDiarizer(cfg=config)
+            model.diarize()
 
-    def detect_overlaps(
-        self, segments1: List[Tuple[float, float]], segments2: List[Tuple[float, float]]
-    ) -> List[Tuple[float, float]]:
-        overlaps = []
-        for start1, end1 in segments1:
-            for start2, end2 in segments2:
-                overlap_start = max(start1, start2)
-                overlap_end = min(end1, end2)
-                if overlap_start < overlap_end:
-                    overlaps.append((overlap_start, overlap_end))
-        return overlaps
+            rttm_file = os.path.join(
+                temp_dir,
+                "pred_rttms",
+                os.path.basename(temp_audio_file).replace(".wav", ".rttm"),
+            )
 
-    def process_stereo_audio(self, audio_file: str) -> dict:
-        audio_data, sr = librosa.load(audio_file, sr=self.sample_rate, mono=False)
+            if os.path.exists(rttm_file):
+                return self.parse_rttm_results(rttm_file, audio_file)
+            else:
+                return {"error": "RTTM file not generated"}
 
-        if len(audio_data.shape) == 1:
-            raise ValueError("Audio file must be stereo")
+    def parse_rttm_results(self, rttm_file: str, audio_file: str) -> dict:
+        audio_data, sr = librosa.load(audio_file, sr=None)
+        total_duration = len(audio_data) / sr
 
-        left_channel = audio_data[0]
-        right_channel = audio_data[1]
+        speaker_segments = {}
+        overlap_segments = []
 
-        left_segments = self.detect_voice_activity(left_channel)
-        right_segments = self.detect_voice_activity(right_channel)
+        with open(rttm_file, "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 8:
+                    start_time = float(parts[3])
+                    duration = float(parts[4])
+                    end_time = start_time + duration
+                    speaker_id = parts[7]
 
-        overlaps = self.detect_overlaps(left_segments, right_segments)
+                    if speaker_id not in speaker_segments:
+                        speaker_segments[speaker_id] = []
+                    speaker_segments[speaker_id].append((start_time, end_time))
+
+        speakers = list(speaker_segments.keys())
+        for i in range(len(speakers)):
+            for j in range(i + 1, len(speakers)):
+                speaker1_segments = speaker_segments[speakers[i]]
+                speaker2_segments = speaker_segments[speakers[j]]
+
+                for start1, end1 in speaker1_segments:
+                    for start2, end2 in speaker2_segments:
+                        overlap_start = max(start1, start2)
+                        overlap_end = min(end1, end2)
+                        if overlap_start < overlap_end:
+                            overlap_segments.append((overlap_start, overlap_end))
+
+        overlap_segments = self.merge_overlapping_segments(overlap_segments)
 
         return {
-            "left_channel_voice": left_segments,
-            "right_channel_voice": right_segments,
-            "overlaps": overlaps,
-            "overlap_duration": sum(end - start for start, end in overlaps),
-            "total_duration": len(audio_data[0]) / self.sample_rate,
+            "total_duration": total_duration,
+            "speaker_segments": speaker_segments,
+            "overlap_segments": overlap_segments,
+            "overlap_duration": sum(end - start for start, end in overlap_segments),
+            "overlap_ratio": sum(end - start for start, end in overlap_segments)
+            / total_duration
+            if total_duration > 0
+            else 0,
+            "num_speakers": len(speakers),
         }
 
-    def advanced_overlap_detection(self, audio_file: str, method: str = "vad") -> dict:
-        audio_data, sr = librosa.load(audio_file, sr=self.sample_rate, mono=False)
+    def merge_overlapping_segments(
+        self, segments: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+        if not segments:
+            return []
+
+        sorted_segments = sorted(segments)
+        merged = [sorted_segments[0]]
+
+        for current_start, current_end in sorted_segments[1:]:
+            last_start, last_end = merged[-1]
+
+            if current_start <= last_end:
+                merged[-1] = (last_start, max(last_end, current_end))
+            else:
+                merged.append((current_start, current_end))
+
+        return merged
+
+    def get_non_overlap_segments(
+        self, total_duration: float, overlap_segments: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+        if not overlap_segments:
+            return [(0.0, total_duration)]
+
+        non_overlap_segments = []
+        sorted_overlaps = sorted(overlap_segments)
+
+        if sorted_overlaps[0][0] > 0:
+            non_overlap_segments.append((0.0, sorted_overlaps[0][0]))
+
+        for i in range(len(sorted_overlaps) - 1):
+            gap_start = sorted_overlaps[i][1]
+            gap_end = sorted_overlaps[i + 1][0]
+            if gap_start < gap_end:
+                non_overlap_segments.append((gap_start, gap_end))
+
+        if sorted_overlaps[-1][1] < total_duration:
+            non_overlap_segments.append((sorted_overlaps[-1][1], total_duration))
+
+        return non_overlap_segments
+
+    def save_audio_segments(
+        self,
+        audio_file: str,
+        audio_name: str,
+        overlap_segments: List[Tuple[float, float]],
+        total_duration: float,
+    ):
+        audio_data, sr = librosa.load(audio_file, sr=None, mono=False)
 
         if len(audio_data.shape) == 1:
-            audio_data = np.array([audio_data, audio_data])
+            audio_data = np.array([audio_data])
 
-        left_channel = audio_data[0]
-        right_channel = audio_data[1]
+        overlap_dir = f"is_overlap/{audio_name}/true"
+        non_overlap_dir = f"is_overlap/{audio_name}/false"
 
-        if method == "vad":
-            left_segments = self.detect_voice_activity(left_channel)
-            right_segments = self.detect_voice_activity(right_channel)
-        elif method == "energy":
-            left_segments = self.energy_based_detection(left_channel)
-            right_segments = self.energy_based_detection(right_channel)
-        elif method == "spectral":
-            left_segments = self.spectral_centroid_detection(left_channel)
-            right_segments = self.spectral_centroid_detection(right_channel)
-        else:
-            raise ValueError("Method must be 'vad', 'energy', or 'spectral'")
+        os.makedirs(overlap_dir, exist_ok=True)
+        os.makedirs(non_overlap_dir, exist_ok=True)
 
-        overlaps = self.detect_overlaps(left_segments, right_segments)
+        for i, (start, end) in enumerate(overlap_segments):
+            start_sample = int(start * sr)
+            end_sample = int(end * sr)
 
-        overlap_ratio = sum(end - start for start, end in overlaps) / (
-            len(audio_data[0]) / self.sample_rate
+            if len(audio_data.shape) == 2:
+                segment = audio_data[:, start_sample:end_sample]
+            else:
+                segment = audio_data[start_sample:end_sample]
+
+            output_file = f"{overlap_dir}/overlap_{i+1:03d}_{start:.2f}s_{end:.2f}s.wav"
+            sf.write(output_file, segment.T if len(segment.shape) == 2 else segment, sr)
+
+        non_overlap_segments = self.get_non_overlap_segments(
+            total_duration, overlap_segments
         )
 
-        return {
-            "method": method,
-            "left_voice_segments": left_segments,
-            "right_voice_segments": right_segments,
-            "overlap_segments": overlaps,
-            "overlap_duration": sum(end - start for start, end in overlaps),
-            "overlap_ratio": overlap_ratio,
-            "total_duration": len(audio_data[0]) / self.sample_rate,
-        }
+        for i, (start, end) in enumerate(non_overlap_segments):
+            if end - start < 0.1:
+                continue
+
+            start_sample = int(start * sr)
+            end_sample = int(end * sr)
+
+            if len(audio_data.shape) == 2:
+                segment = audio_data[:, start_sample:end_sample]
+            else:
+                segment = audio_data[start_sample:end_sample]
+
+            output_file = (
+                f"{non_overlap_dir}/non_overlap_{i+1:03d}_{start:.2f}s_{end:.2f}s.wav"
+            )
+            sf.write(output_file, segment.T if len(segment.shape) == 2 else segment, sr)
 
 
 def main():
-    detector = VoiceOverlapDetector()
+    detector = NeMoVoiceOverlapDetector()
 
-    audio_file = "sample_audio.wav"
+    audio_name = "gapyear"
+    audio_file = "data/" + audio_name + ".wav"
 
     try:
-        results = detector.advanced_overlap_detection(audio_file, method="vad")
+        print("Loading NeMo ClusteringDiarizer and processing audio...")
+        results = detector.detect_overlaps_with_nemo(audio_file)
 
-        print(f"Detection Method: {results['method']}")
+        if "error" in results:
+            print(f"Error: {results['error']}")
+            return
+
         print(f"Total Duration: {results['total_duration']:.2f} seconds")
+        print(f"Number of Speakers: {results['num_speakers']}")
         print(f"Overlap Duration: {results['overlap_duration']:.2f} seconds")
         print(f"Overlap Ratio: {results['overlap_ratio']:.2%}")
+
+        print(f"\nSpeaker Segments:")
+        for speaker_id, segments in results["speaker_segments"].items():
+            print(f"  Speaker {speaker_id}: {len(segments)} segments")
+            for i, (start, end) in enumerate(segments[:3]):
+                print(f"    {i+1}: {start:.2f}s - {end:.2f}s ({end-start:.2f}s)")
+            if len(segments) > 3:
+                print(f"    ... and {len(segments)-3} more segments")
+
         print(f"\nOverlap Segments:")
         for i, (start, end) in enumerate(results["overlap_segments"]):
             print(f"  {i+1}: {start:.2f}s - {end:.2f}s ({end-start:.2f}s)")
 
+        detector.save_audio_segments(
+            audio_file,
+            audio_name,
+            results["overlap_segments"],
+            results["total_duration"],
+        )
+
+        print(f"\nAudio segments saved to:")
+        print(f"  Overlap segments: is_overlap/{audio_name}/true/")
+        print(f"  Non-overlap segments: is_overlap/{audio_name}/false/")
+
     except FileNotFoundError:
-        print("Audio file not found. Please provide a valid stereo audio file.")
+        print("Audio file not found. Please provide a valid audio file.")
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

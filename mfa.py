@@ -5,7 +5,7 @@ from textgrids import TextGrid
 import torchaudio
 import re
 
-directory_name = "ziptalk"  # enter directory name
+directory_name = "mammoth"  # enter directory name
 
 for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
     file_path = "data/" + directory_name + "/processed_" + str(i)
