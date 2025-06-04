@@ -1,7 +1,7 @@
 import os
 from pydub import AudioSegment
 
-file_name = ""  # enter file name
+file_name = "mammoth"  # enter file name
 file_path = "data/" + file_name + ".wav"
 
 if os.path.exists(file_path):

@@ -5,7 +5,7 @@ from textgrids import TextGrid
 import torchaudio
 import re
 
-directory_name = "짚톡 ) MBTI 토론 1회 (w.핑맨,김똘복,꽃핀)"  # enter directory name
+directory_name = "ziptalk"  # enter directory name
 
 for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
     file_path = "data/" + directory_name + "/processed_" + str(i)
@@ -90,6 +90,8 @@ for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
                 "korean_mfa",
                 "korean_mfa",
                 align_directory,
+                "--beam",
+                "40000",
             ]
         )
         print("mfa align done")

@@ -12,3 +12,7 @@ metadata/*
 mfa/*
 diarized_data/*
 transcription_data/*
+temp_chunks
+mfa_temp
+results
+temp_turns

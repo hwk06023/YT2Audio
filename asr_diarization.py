@@ -9,12 +9,13 @@ import json
 from itertools import groupby
 from time import sleep
 import httpx
+import re
 
 load_dotenv()
 
 client = ElevenLabs(
     api_key=os.getenv("ELEVENLABS_API_KEY"),
-    timeout=300,  # Increasing timeout to 5 minutes
+    timeout=1200,
 )
 
 
@@ -26,53 +27,60 @@ def ensure_dir_exists(file_path):
     return file_path
 
 
-directory_name = "짚톡 ) MBTI 토론 1회 (w.핑맨,김똘복,꽃핀)"  # enter directory name
+def process_audio_file(
+    audio_file_path, output_prefix="", apply_audio_processing=True, is_main_file=True
+):
+    base_name = os.path.splitext(os.path.basename(audio_file_path))[0]
 
-for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
-    file_path = "data/" + directory_name + "/processed_" + str(i)
-    text_file_path = file_path + ".txt"
-    metadata_file_path = "meta" + text_file_path
-    audio_file_path = file_path + ".wav"
-
-    # Create metadata directory if it doesn't exist
-    ensure_dir_exists(metadata_file_path)
-
-    if os.path.exists(audio_file_path):
-        audio = AudioSegment.from_wav(audio_file_path)
+    if is_main_file:
+        name = base_name
+        transcription_file = f"transcription_data/{name}.txt"
+        diarized_file = f"diarized_data/{name}.txt"
     else:
+        name = os.path.basename(os.path.dirname(audio_file_path))
+        transcription_file = f"transcription_data/{name}/{base_name}.txt"
+        diarized_file = f"diarized_data/{name}/{base_name}.txt"
+    if os.path.exists(transcription_file) and os.path.exists(diarized_file):
+        print(f"Skipping {audio_file_path} - already processed")
+        return True
+
+    print(f"Processing: {audio_file_path}")
+
+    audio_file_path = f"data/{audio_file_path}"
+    if not os.path.exists(audio_file_path):
         print(f"File does not exist: {audio_file_path}")
-        continue
+        return False
+
+    audio = AudioSegment.from_wav(audio_file_path)
+
+    if is_main_file:
+        start_time = 60 * 1000
+        end_time = len(audio) - 60 * 1000
+        audio = audio[start_time:end_time]
 
     buffer = io.BytesIO()
     audio.export(buffer, format="wav")
     buffer.seek(0)
 
-    print(f"{i}th file: converting speech to text...")
+    print(f"Converting speech to text...")
     print("Diarization: enabled")
 
     result = client.speech_to_text.convert(
-        file=buffer,
-        model_id="scribe_v1",
-        tag_audio_events=True,
-        diarize=True,
-        num_speakers=4,  # TODO: change this value based on the number of speakers
-        timestamps_granularity="none",
+        file=buffer, model_id="scribe_v1", diarize=True, tag_audio_events=False
     )
 
     print("\n--- Transcription Result ---")
     print(result.text)
 
-    # Save transcription result (excluding audio events)
-    transcription_file = "transcription_" + text_file_path
     ensure_dir_exists(transcription_file)
 
-    # Extract only words, excluding audio events
     transcription_text = ""
     if hasattr(result, "words") and result.words:
         word_texts = []
         for word in result.words:
             if word.type == "word":
-                word_texts.append(word.text)
+                if word.text:
+                    word_texts.append(word.text)
         transcription_text = " ".join(word_texts)
     else:
         transcription_text = result.text
@@ -80,8 +88,7 @@ for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
     with open(transcription_file, "w", encoding="utf-8") as f:
         f.write(transcription_text)
 
-    # Save diarized text
-    output_file = "diarized_" + text_file_path
+    output_file = diarized_file
     text_to_save = ""
     if hasattr(result, "words") and result.words:
         formatted_text_parts = []
@@ -91,34 +98,32 @@ for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
         for word in result.words:
             if word.type == "word":
                 speaker = word.speaker_id if hasattr(word, "speaker_id") else "Unknown"
-                if speaker != current_speaker:
-                    if line_buffer:  # Append previous line buffer
-                        formatted_text_parts.append(line_buffer.strip())
-                    line_buffer = f"{speaker}: {word.text}"  # Start new line buffer
-                    current_speaker = speaker
-                else:
-                    if line_buffer:  # Add space only if buffer has content
-                        line_buffer += f" {word.text}"
-                    else:  # If buffer somehow empty, start it
+
+                if word.text:
+                    if speaker != current_speaker:
+                        if line_buffer:
+                            formatted_text_parts.append(line_buffer.strip())
                         line_buffer = f"{speaker}: {word.text}"
-
+                        current_speaker = speaker
+                    else:
+                        if line_buffer:
+                            line_buffer += f" {word.text}"
+                        else:
+                            line_buffer = f"{speaker}: {word.text}"
             elif word.type == "audio_event":
-                if line_buffer:  # Append previous line buffer before event
+                if line_buffer:
                     formatted_text_parts.append(line_buffer.strip())
-                    line_buffer = ""  # Reset buffer
-                    current_speaker = None  # Reset speaker context for events
-                formatted_text_parts.append(f"audio_event: {word.text}")  # Add event
-            # 'spacing' events are implicitly handled by adding spaces between words
+                    line_buffer = ""
+                    current_speaker = None
+                formatted_text_parts.append(f"audio_event: {word.text}")
 
-        if line_buffer:  # Append any remaining buffer
+        if line_buffer:
             formatted_text_parts.append(line_buffer.strip())
 
         text_to_save = "\n".join(formatted_text_parts)
     else:
-        # Fallback to raw text if not diarizing or no word data
         text_to_save = result.text
 
-    # Create text output directory if it doesn't exist
     ensure_dir_exists(output_file)
 
     with open(output_file, "w", encoding="utf-8") as f:
@@ -138,23 +143,38 @@ for i in range(1, len(os.listdir("data/" + directory_name)) + 1):
         for word in result.words:
             if word.type == "audio_event":
                 print(f"- Audio event: {word.text} at {word.start}s to {word.end}s")
-                audio_events.append(word)
-            elif word.type == "word":
-                print(
-                    f"- Word: '{word.text}' (Speaker {word.speaker_id}) at {word.start}s to {word.end}s"
+                audio_events.append(
+                    {
+                        "text": word.text,
+                        "start": word.start,
+                        "end": word.end,
+                        "type": "audio_event",
+                    }
                 )
-                speakers.add(word.speaker_id)
-
-        ensure_dir_exists(metadata_file_path)
-        with open(metadata_file_path, "w", encoding="utf-8") as f:
-            f.write(f"Total speakers detected: {len(speakers)}\n")
-            for speaker in speakers:
-                f.write(f"- {speaker}\n")
-            f.write(f"\nTotal audio events detected: {len(audio_events)}\n")
-            for event in audio_events:
-                f.write(f"- {event.text} at {event.start}s to {event.end}s\n")
-        print(f"Metadata saved to {metadata_file_path}")
-
+            elif word.type == "word":
+                if word.text:
+                    print(
+                        f"- Word: '{word.text}' (Speaker {word.speaker_id}) at {word.start}s to {word.end}s"
+                    )
+                    speakers.add(word.speaker_id)
         print(f"\nTotal speakers detected: {len(speakers)}")
         for speaker in speakers:
             print(f"- {speaker}")
+
+    return True
+
+
+directory_name = "mammoth"
+
+main_audio_file = f"{directory_name}.wav"
+process_audio_file(main_audio_file, apply_audio_processing=True, is_main_file=True)
+
+data_directory = f"data/{directory_name}"
+if os.path.exists(data_directory):
+    for i in range(1, len(os.listdir(data_directory)) + 1):
+        processed_audio_file = f"{directory_name}/processed_{i}.wav"
+        process_audio_file(
+            processed_audio_file, apply_audio_processing=False, is_main_file=False
+        )
+else:
+    print(f"Directory does not exist: {data_directory}")
