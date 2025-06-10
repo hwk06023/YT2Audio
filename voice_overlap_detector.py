@@ -203,6 +203,7 @@ class NeMoVoiceOverlapDetector:
         audio_name: str,
         overlap_segments: List[Tuple[float, float]],
         total_duration: float,
+        speaker_segments: dict = None,
     ):
         audio_data, sr = librosa.load(audio_file, sr=None, mono=False)
 
@@ -211,9 +212,11 @@ class NeMoVoiceOverlapDetector:
 
         overlap_dir = f"is_overlap/{audio_name}/true"
         non_overlap_dir = f"is_overlap/{audio_name}/false"
+        segments_dir = f"is_overlap/{audio_name}/segments"
 
         os.makedirs(overlap_dir, exist_ok=True)
         os.makedirs(non_overlap_dir, exist_ok=True)
+        os.makedirs(segments_dir, exist_ok=True)
 
         for i, (start, end) in enumerate(overlap_segments):
             start_sample = int(start * sr)
@@ -247,6 +250,30 @@ class NeMoVoiceOverlapDetector:
                 f"{non_overlap_dir}/non_overlap_{i+1:03d}_{start:.2f}s_{end:.2f}s.wav"
             )
             sf.write(output_file, segment.T if len(segment.shape) == 2 else segment, sr)
+
+        if speaker_segments:
+            for speaker_id, segments in speaker_segments.items():
+                speaker_dir = f"{segments_dir}/{speaker_id}"
+                os.makedirs(speaker_dir, exist_ok=True)
+
+                for i, (start, end) in enumerate(segments):
+                    if end - start < 0.1:
+                        continue
+
+                    start_sample = int(start * sr)
+                    end_sample = int(end * sr)
+
+                    if len(audio_data.shape) == 2:
+                        segment = audio_data[:, start_sample:end_sample]
+                    else:
+                        segment = audio_data[start_sample:end_sample]
+
+                    output_file = f"{speaker_dir}/{speaker_id}_segment_{i+1:03d}_{start:.2f}s_{end:.2f}s.wav"
+                    sf.write(
+                        output_file,
+                        segment.T if len(segment.shape) == 2 else segment,
+                        sr,
+                    )
 
 
 def main():
@@ -285,11 +312,13 @@ def main():
             audio_name,
             results["overlap_segments"],
             results["total_duration"],
+            results["speaker_segments"],
         )
 
         print(f"\nAudio segments saved to:")
         print(f"  Overlap segments: is_overlap/{audio_name}/true/")
         print(f"  Non-overlap segments: is_overlap/{audio_name}/false/")
+        print(f"  Speaker segments: is_overlap/{audio_name}/segments/")
 
     except FileNotFoundError:
         print("Audio file not found. Please provide a valid audio file.")
