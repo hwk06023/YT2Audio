@@ -32,81 +32,64 @@ class SpeakerEmbeddingAssigner:
             raise ValueError("model_type must be 'ecapa' or 'wavlm'")
 
     def _init_ecapa_model(self):
-        try:
-            self.model = EncoderClassifier.from_hparams(
-                source="speechbrain/spkrec-ecapa-voxceleb",
-                savedir="tmp/spkrec-ecapa-voxceleb",
-                run_opts={"device": str(self.device)},
-            )
-            self.target_sr = 16000
-            print("ECAPA-TDNN model loaded successfully")
-        except Exception as e:
-            print(f"Error loading ECAPA-TDNN model: {e}")
-            raise
+        self.model = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir="tmp/spkrec-ecapa-voxceleb",
+            run_opts={"device": str(self.device)},
+        )
+        self.target_sr = 16000
+        print("ECAPA-TDNN model loaded successfully")
 
     def _init_wavlm_model(self):
-        try:
-            self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
-                "microsoft/wavlm-base-plus-sv"
-            )
-            self.model = WavLMModel.from_pretrained("microsoft/wavlm-base-plus-sv").to(
-                self.device
-            )
-            self.model.eval()
-            self.target_sr = self.feature_extractor.sampling_rate
-            print("WavLM-based model loaded successfully")
-        except Exception as e:
-            print(f"Error loading WavLM model: {e}")
-            raise
+        self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+            "microsoft/wavlm-base-plus-sv"
+        )
+        self.model = WavLMModel.from_pretrained("microsoft/wavlm-base-plus-sv").to(
+            self.device
+        )
+        self.model.eval()
+        self.target_sr = self.feature_extractor.sampling_rate
+        print("WavLM-based model loaded successfully")
 
     def load_and_preprocess_audio(self, audio_path, max_duration=10):
-        try:
-            waveform, sr = torchaudio.load(audio_path)
+        waveform, sr = torchaudio.load(audio_path)
 
-            if sr != self.target_sr:
-                resampler = torchaudio.transforms.Resample(sr, self.target_sr)
-                waveform = resampler(waveform)
+        if sr != self.target_sr:
+            resampler = torchaudio.transforms.Resample(sr, self.target_sr)
+            waveform = resampler(waveform)
 
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
 
-            max_samples = int(max_duration * self.target_sr)
-            if waveform.shape[1] > max_samples:
-                waveform = waveform[:, :max_samples]
-            elif waveform.shape[1] < int(0.5 * self.target_sr):
-                padding = int(0.5 * self.target_sr) - waveform.shape[1]
-                waveform = torch.nn.functional.pad(waveform, (0, padding))
+        max_samples = int(max_duration * self.target_sr)
+        if waveform.shape[1] > max_samples:
+            waveform = waveform[:, :max_samples]
+        elif waveform.shape[1] < int(0.5 * self.target_sr):
+            padding = int(0.5 * self.target_sr) - waveform.shape[1]
+            waveform = torch.nn.functional.pad(waveform, (0, padding))
 
-            return waveform.to(self.device)
-        except Exception as e:
-            print(f"Error loading audio {audio_path}: {e}")
-            return None
+        return waveform.to(self.device)
 
     def extract_speaker_embedding(self, audio_path):
         waveform = self.load_and_preprocess_audio(audio_path)
         if waveform is None:
             return None
 
-        try:
-            with torch.no_grad():
-                if self.model_type == "ecapa":
-                    embedding = self.model.encode_batch(waveform)
-                    return embedding.squeeze().cpu().numpy()
+        with torch.no_grad():
+            if self.model_type == "ecapa":
+                embedding = self.model.encode_batch(waveform)
+                return embedding.squeeze().cpu().numpy()
 
-                elif self.model_type == "wavlm":
-                    inputs = self.feature_extractor(
-                        waveform.squeeze().cpu().numpy(),
-                        sampling_rate=self.target_sr,
-                        return_tensors="pt",
-                    ).to(self.device)
+            elif self.model_type == "wavlm":
+                inputs = self.feature_extractor(
+                    waveform.squeeze().cpu().numpy(),
+                    sampling_rate=self.target_sr,
+                    return_tensors="pt",
+                ).to(self.device)
 
-                    outputs = self.model(**inputs)
-                    embedding = torch.mean(outputs.last_hidden_state, dim=1)
-                    return embedding.squeeze().cpu().numpy()
-
-        except Exception as e:
-            print(f"Error extracting embedding from {audio_path}: {e}")
-            return None
+                outputs = self.model(**inputs)
+                embedding = torch.mean(outputs.last_hidden_state, dim=1)
+                return embedding.squeeze().cpu().numpy()
 
     def extract_speaker_embeddings(self, results_dir, max_files_per_speaker=20):
         turns_info_path = os.path.join(results_dir, "turns_info.json")
