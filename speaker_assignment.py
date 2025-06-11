@@ -10,8 +10,7 @@ from sklearn.preprocessing import StandardScaler
 import argparse
 from collections import defaultdict
 from pathlib import Path
-import speechbrain as sb
-from speechbrain.pretrained import EncoderClassifier
+from speechbrain.inference import EncoderClassifier
 from transformers import Wav2Vec2FeatureExtractor, WavLMModel
 
 
