@@ -16,8 +16,13 @@ temp_chunks
 mfa_temp
 results
 temp_turns
-mindlogic-summer.pem
+*.pem
 is_overlap
 tmp
 elevenlabs_results
+elevenlabs_results_temp
 turns
+final_results
+audio_segments
+api_inspection
+*.log

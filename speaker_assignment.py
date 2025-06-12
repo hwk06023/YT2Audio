@@ -30,6 +30,7 @@ class SpeakerEmbeddingAssigner:
         else:
             raise ValueError("model_type must be 'ecapa' or 'wavlm'")
 
+    # ECAPA-TDNN model is better than WavLM-based model
     def _init_ecapa_model(self):
         self.model = EncoderClassifier.from_hparams(
             source="speechbrain/spkrec-ecapa-voxceleb",
