@@ -26,3 +26,5 @@ final_results
 audio_segments
 api_inspection
 *.log
+cookies_*
+lists/test_*
