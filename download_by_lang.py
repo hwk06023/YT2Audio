@@ -10,7 +10,7 @@ SEGMENT_DURATION = 1800
 
 lang_files = {
     # "english": "lists/english.txt",
-    "korean": "lists/test_korean.txt",
+    "korean": "lists/korean.txt",
     # "japanese": "lists/japanese.txt",
     # "chinese": "lists/chinese.txt",
 }
@@ -86,7 +86,7 @@ def group_into_containers(segments):
 
 
 def save_metadata(lang, containers, all_videos):
-    base_dir = f"../../{lang}/wav"
+    base_dir = f"/mnt/data/{lang}/wav"
     os.makedirs(base_dir, exist_ok=True)
 
     with open(f"{base_dir}/full_metadata.txt", "w") as f:
@@ -185,7 +185,7 @@ def download_video_segments(video, video_segments, output_dir):
 
 
 def update_container_metadata(lang, container, downloaded_count):
-    container_dir = f"../../{lang}/wav/container_{container['index']}"
+    container_dir = f"/mnt/data/{lang}/wav/container_{container['index']}"
     with open(f"{container_dir}/container_metadata.txt", "w") as f:
         f.write(
             f"Container {container['index']} - {downloaded_count}/{len(container['segments'])} downloaded\n\n"
@@ -198,7 +198,7 @@ def update_container_metadata(lang, container, downloaded_count):
 
 
 def load_endpoint(lang):
-    endpoint_file = f"../../{lang}/wav/endpoint.json"
+    endpoint_file = f"/mnt/data/{lang}/wav/endpoint.json"
     if os.path.exists(endpoint_file):
         with open(endpoint_file, "r") as f:
             return json.load(f)
@@ -206,7 +206,7 @@ def load_endpoint(lang):
 
 
 def save_endpoint(lang, container_index, segment_index):
-    endpoint_file = f"../../{lang}/wav/endpoint.json"
+    endpoint_file = f"/mnt/data/{lang}/wav/endpoint.json"
     with open(endpoint_file, "w") as f:
         json.dump(
             {"container_index": container_index, "segment_index": segment_index}, f
@@ -216,7 +216,7 @@ def save_endpoint(lang, container_index, segment_index):
 def main():
     for lang, txt_path in lang_files.items():
         print(f"\n=== Processing {lang.upper()} ===")
-        os.makedirs(f"../../{lang}/wav", exist_ok=True)
+        os.makedirs(f"/mnt/data/{lang}/wav", exist_ok=True)
 
         with open(txt_path, "r") as f:
             urls = [line.strip() for line in f if line.strip()]
@@ -247,7 +247,7 @@ def main():
         start_segment = endpoint["segment_index"]
 
         for container in containers[start_container - 1 :]:
-            container_dir = f"../../{lang}/wav/container_{container['index']}"
+            container_dir = f"/mnt/data/{lang}/wav/container_{container['index']}"
             print(f"   Downloading Container {container['index']}/{len(containers)}...")
 
             downloaded_count = 0
