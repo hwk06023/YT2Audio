@@ -117,27 +117,71 @@ def save_metadata(lang, containers, all_videos):
                 f.write(f"⏳ {segment['filename']}\n")
 
 
-def download_segment(segment, output_dir):
-    command = [
+def download_video_segments(video, video_segments, output_dir):
+    video_id = video["id"]
+    video_url = video["url"]
+
+    segment_files = [
+        os.path.join(output_dir, seg["filename"]) for seg in video_segments
+    ]
+    existing_files = [f for f in segment_files if os.path.exists(f)]
+
+    if len(existing_files) == len(segment_files):
+        return len(segment_files)
+
+    ytdlp_cmd = [
         "yt-dlp",
-        segment["video_url"],
-        "-x",
-        "--audio-format",
-        audio_format,
-        "--audio-quality",
-        "0",
-        "--output",
-        os.path.join(output_dir, segment["filename"]),
-        "--ignore-errors",
-        "--no-overwrites",
+        video_url,
+        "--format",
+        "bestaudio",
+        "--quiet",
+        "--no-warnings",
         "--cookies",
         "cookies_2.txt",
-        "--download-sections",
-        segment["section_str"],
+        "-o",
+        "-",
     ]
 
-    result = subprocess.run(command, capture_output=True, text=True)
-    return result.returncode == 0
+    ffmpeg_outputs = []
+    for segment in video_segments:
+        output_path = os.path.join(output_dir, segment["filename"])
+        if not os.path.exists(output_path):
+            start_seconds = segment["segment_index"] * SEGMENT_DURATION
+            ffmpeg_outputs.extend(
+                [
+                    "-ss",
+                    str(start_seconds),
+                    "-t",
+                    str(SEGMENT_DURATION),
+                    "-acodec",
+                    "pcm_s16le" if audio_format == "wav" else "copy",
+                    "-ar",
+                    "44100",
+                    "-ac",
+                    "2",
+                    output_path,
+                ]
+            )
+
+    if not ffmpeg_outputs:
+        return len(existing_files)
+
+    ffmpeg_cmd = ["ffmpeg", "-y", "-i", "pipe:0", "-vn"] + ffmpeg_outputs
+
+    ytdlp_proc = subprocess.Popen(
+        ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+    ffmpeg_proc = subprocess.Popen(
+        ffmpeg_cmd, stdin=ytdlp_proc.stdout, stderr=subprocess.DEVNULL
+    )
+
+    ytdlp_proc.stdout.close()
+
+    ytdlp_proc.wait()
+    ffmpeg_proc.wait()
+
+    success_count = len([f for f in segment_files if os.path.exists(f)])
+    return success_count
 
 
 def update_container_metadata(lang, container, downloaded_count):
@@ -207,28 +251,28 @@ def main():
             print(f"   Downloading Container {container['index']}/{len(containers)}...")
 
             downloaded_count = 0
-            for i, segment in enumerate(
-                container["segments"][start_segment:], start_segment
-            ):
-                part_num = segment["segment_index"] + 1
-                total_parts = math.ceil(
-                    next(
-                        v["duration"]
-                        for v in all_videos
-                        if v["id"] == segment["video_id"]
-                    )
-                    / SEGMENT_DURATION
-                )
 
-                print(
-                    f"     Segment {i+1}/{len(container['segments'])}: {segment['video_title']} - Part {part_num}/{total_parts} [{segment['start_time']}-{segment['end_time']}]"
-                )
+            # Group segments by video for efficient downloading
+            video_segments_map = {}
+            for segment in container["segments"]:
+                video_id = segment["video_id"]
+                if video_id not in video_segments_map:
+                    video_segments_map[video_id] = []
+                video_segments_map[video_id].append(segment)
 
-                if download_segment(segment, container_dir):
-                    downloaded_count += 1
+            for video_id, video_segments in video_segments_map.items():
+                video = next(v for v in all_videos if v["id"] == video_id)
+                total_parts = len(video_segments)
+
+                print(f"     Downloading {video['title']} ({total_parts} parts)...")
+
+                success_count = download_video_segments(
+                    video, video_segments, container_dir
+                )
+                downloaded_count += success_count
 
                 update_container_metadata(lang, container, downloaded_count)
-                save_endpoint(lang, container["index"], i + 1)
+                save_endpoint(lang, container["index"], len(container["segments"]))
 
             start_segment = 0
 
