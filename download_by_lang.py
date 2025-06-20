@@ -36,13 +36,13 @@ def get_playlist_videos(url):
     for line in result.stdout.strip().split("\n"):
         if line.strip():
             video_info = json.loads(line)
-            if video_info.get("_type") != "playlist":
+            if video_info["_type"] != "playlist":
                 videos.append(
                     {
-                        "id": video_info.get("id"),
-                        "title": video_info.get("title", "Unknown"),
-                        "url": f"https://www.youtube.com/watch?v={video_info.get('id')}",
-                        "duration": video_info.get("duration", 0),
+                        "id": video_info["id"],
+                        "title": video_info["title"],
+                        "url": f"https://www.youtube.com/watch?v={video_info['id']}",
+                        "duration": video_info["duration"],
                     }
                 )
     print(f"get_playlist_videos: {videos}")
@@ -53,6 +53,8 @@ def create_segments(videos):
     segments = []
     for video in videos:
         duration = video["duration"]
+        if not duration or duration == 0:
+            continue
         num_segments = math.ceil(duration / SEGMENT_DURATION)
         for i in range(num_segments):
             start = i * SEGMENT_DURATION
