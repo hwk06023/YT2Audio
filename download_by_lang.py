@@ -54,6 +54,7 @@ def create_segments(videos):
     for video in videos:
         duration = video["duration"]
         if not duration or duration == 0:
+            # 이 쪽에서 duration 이 120 (2분)이하인 영상(숏폼)도 날리는게 좋을 것 같다는 생각이 고민 중에 있습니다.
             continue
         num_segments = math.ceil(duration / SEGMENT_DURATION)
         for i in range(num_segments):
