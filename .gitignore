@@ -28,3 +28,4 @@ api_inspection
 *.log
 cookies_*
 lists/test_*
+tag_classification_cache.json
